@@ -61,8 +61,8 @@ Roadmap
 
 Contributing
 
-PRs and issues are welcome!
+- PRs and issues are welcome!
 
 License
 
-MIT License.
+- MIT License.
