@@ -1,117 +1,132 @@
 import os
 import re
+import requests
+import json
 from dotenv import load_dotenv
-from elevenlabs import VoiceSettings
-from elevenlabs.client import ElevenLabs
 from pydub import AudioSegment
 from io import BytesIO
+import time
+import base64
 
 # Load environment variables from .env file
 load_dotenv()
 
-# Initialize ElevenLabs client with API key
-ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY")
-elevenlabs = ElevenLabs(api_key=ELEVENLABS_API_KEY)
+# Initialize Murf API credentials
+MURF_API_KEY = os.getenv("MURF_API_KEY")
+MURF_BASE_URL = "https://api.murf.ai/v1"
 
-# Define voice IDs for different speakers
-VOICE_MAP = {
-    "HOST": "9BWtsMINqrJLrRacOk9x",
-    "GUEST": "IKne3meq5aSn9XLyUdCD",
-    "DEFAULT": "N2lVS1w4EtoT3dr4eOWO"
+# Define voice IDs for different speakers (Murf voice IDs)
+VOICE_MAP = {"HOST": "en-US-ken", "GUEST": "en-US-natalie", "DEFAULT": "en-US-charles"}
+
+# Define default voice settings for Murf
+DEFAULT_VOICE_SETTINGS = {
+    "speed": 0,
+    "pitch": 0,
+    "emphasis": 0,
+    "pause": 300,
 }
 
-# Define default voice settings
-DEFAULT_VOICE_SETTINGS = VoiceSettings(
-    stability=0.0,
-    similarity_boost=1.0,
-    style=0.0,
-    use_speaker_boost=True,
-    speed=1.0,
-)
 
 def convert_text_to_audio_segment(text: str, voice_id: str) -> AudioSegment:
-    """Converts text to an audio segment using ElevenLabs."""
-    if not text or not text.strip():
+    """Converts text to an AudioSegment using Murf API, handling both encodedAudio and audioContent."""
+    if not text.strip():
         return AudioSegment.empty()
 
+    payload = {
+        "voiceId": voice_id,
+        "text": text.strip(),
+        "speed": DEFAULT_VOICE_SETTINGS["speed"],
+        "pitch": DEFAULT_VOICE_SETTINGS["pitch"],
+        "format": "MP3",
+        "sampleRate": 24000,
+        "encodeAsBase64": True,
+    }
+    headers = {"api-key": MURF_API_KEY, "Content-Type": "application/json"}
+
+    resp = requests.post(
+        f"{MURF_BASE_URL}/speech/generate", headers=headers, json=payload
+    )
+    if resp.status_code != 200:
+        print(f"API Error {resp.status_code}: {resp.text}")
+        return AudioSegment.empty()
+
+    result = resp.json()
+    b64 = None
+
+    # Murf may return either of these:
+    if "audioContent" in result and result["audioContent"]:
+        b64 = result["audioContent"]
+    elif "encodedAudio" in result and result["encodedAudio"]:
+        b64 = result["encodedAudio"]
+    elif "url" in result and result["url"]:
+        # fallback to URL
+        url_resp = requests.get(result["url"])
+        if url_resp.status_code == 200:
+            return AudioSegment.from_file(BytesIO(url_resp.content), format="mp3")
+        else:
+            print(f"Failed to fetch from URL: {url_resp.status_code}")
+            return AudioSegment.empty()
+    else:
+        print("No audioContent, encodedAudio, or URL in response.")
+        return AudioSegment.empty()
+
+    # decode base64
     try:
-        response = elevenlabs.text_to_speech.convert(
-            voice_id=voice_id,
-            output_format="mp3_22050_32",
-            text=text.strip(),
-            model_id="eleven_turbo_v2_5",
-            voice_settings=DEFAULT_VOICE_SETTINGS,
-        )
-
-        audio_chunks = []
-        for chunk in response:
-            if chunk:
-                audio_chunks.append(chunk)
-
-        if audio_chunks:
-            audio_bytes = b"".join(audio_chunks)
-            if len(audio_bytes) > 0:
-                audio_buffer = BytesIO(audio_bytes)
-                return AudioSegment.from_file(audio_buffer, format="mp3")
-
-        return AudioSegment.empty()
-
+        audio_data = base64.b64decode(b64)
+        return AudioSegment.from_file(BytesIO(audio_data), format="mp3")
     except Exception as e:
-        print(f"Error during TTS conversion: {e}")
+        print("Error decoding audio:", e)
         return AudioSegment.empty()
 
-def synthesize_conversation(conversation_text: str, output_filename: str = "conversation_output.mp3") -> str:
-    """
-    Parses conversation text, synthesizes audio for different speakers,
-    and combines them into a single MP3 file.
-    """
-    # Find speaker tags and their text
-    segments = re.findall(r"\[(HOST|GUEST)\]\s*(.*?)(?=\[(?:HOST|GUEST)\]|$)", conversation_text, re.DOTALL)
 
+def synthesize_conversation(
+    conversation_text: str, output_filename: str = "conversation_output.mp3"
+) -> str:
+    segments = re.findall(
+        r"\[(HOST|GUEST)\]\s*(.*?)(?=\[(?:HOST|GUEST)\]|$)",
+        conversation_text,
+        re.DOTALL,
+    )
     if not segments:
-        # No speaker tags found, use default voice
-        combined_audio = convert_text_to_audio_segment(conversation_text, VOICE_MAP["DEFAULT"])
-        if len(combined_audio) > 0:
-            combined_audio.export(output_filename, format="mp3")
-            return output_filename
-        return ""
-
-    combined_audio = AudioSegment.empty()
-
-    for speaker_tag, text_content in segments:
-        speaker_tag = speaker_tag.upper()
-        voice_id = VOICE_MAP.get(speaker_tag, VOICE_MAP["DEFAULT"])
-
-        # Clean up text content
-        clean_text = text_content.strip()
-        clean_text = re.sub(r"\[.*?\]", "", clean_text)  # Remove sound cues in brackets
-        clean_text = re.sub(r"\s+", " ", clean_text)  # Normalize whitespace
-
-        if not clean_text:
-            continue
-
-        audio_segment = convert_text_to_audio_segment(clean_text, voice_id)
-        if len(audio_segment) > 0:
-            combined_audio += audio_segment
-
-    if len(combined_audio) > 0:
-        combined_audio.export(output_filename, format="mp3")
+        # no tags → default voice
+        audio = convert_text_to_audio_segment(conversation_text, VOICE_MAP["DEFAULT"])
+        if not audio:
+            return ""
+        audio.export(output_filename, format="mp3")
         return output_filename
 
+    combined = AudioSegment.empty()
+    for tag, txt in segments:
+        vid = VOICE_MAP.get(tag.upper(), VOICE_MAP["DEFAULT"])
+        clean = re.sub(r"\s+", " ", txt.strip())
+        seg = convert_text_to_audio_segment(clean, vid)
+        if seg:
+            combined += seg + AudioSegment.silent(duration=500)
+        time.sleep(0.5)
+
+    if combined:
+        os.makedirs(os.path.dirname(output_filename) or ".", exist_ok=True)
+        combined.export(output_filename, format="mp3")
+        return output_filename
     return ""
 
-# Example usage
-if __name__ == "__main__":
-    conversation_example = """
-[HOST] Welcome to the podcast! Today, we have a very special guest with us. How are you doing today?
-[GUEST] I'm doing great, thank you for having me! It's wonderful to be here.
-[HOST] It's our pleasure. We're going to talk about some exciting new developments in AI.
-[GUEST] Yes, I'm really looking forward to diving into that.
-[HOST] Fantastic. Let's start with your latest research.
-"""
 
-    output_path = synthesize_conversation(conversation_example, "outputs/podcast_episode.mp3")
-    if output_path:
-        print(f"Audio file created: {output_path}")
+if __name__ == "__main__":
+    # Optional: print available voices to confirm your IDs
+    def list_voices():
+        hdr = {"api-key": MURF_API_KEY, "Content-Type": "application/json"}
+        r = requests.get(f"{MURF_BASE_URL}/speech/voices", headers=hdr)
+        print("Voices:", r.status_code, r.text)
+
+    # list_voices()
+
+    convo = """
+    [HOST] Welcome to the podcast! Today, we have a very special guest.
+    [GUEST] Thanks for having me — excited to chat!
+    [HOST] Let’s dive in.
+    """
+    out = synthesize_conversation(convo, "outputs/podcast_episode.mp3")
+    if out:
+        print("Audio generated at", out)
     else:
-        print("Failed to create audio file")
+        print("Failed to generate audio.")

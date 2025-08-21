@@ -3,9 +3,12 @@ from bs4 import BeautifulSoup
 import logging
 
 # Configure logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logging.basicConfig(
+    level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
+)
 
-def fetch_blog_content(url:str)->str|None:
+
+def fetch_blog_content(url: str) -> str | None:
     """
     Fetches HTML content from a given URL.
     :param url: URL of the blog to scrape.
@@ -15,7 +18,7 @@ def fetch_blog_content(url:str)->str|None:
     try:
         logging.info(f"Fetching content from {url}")
         headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
         }
         response = requests.get(url=url, headers=headers, timeout=10)
         response.raise_for_status()  # Raise an error for bad responses
@@ -25,7 +28,8 @@ def fetch_blog_content(url:str)->str|None:
         logging.error(f"Error fetching content from {url}: {e}")
         return None
 
-def parse_blog_content(html_content:str)->str|None:
+
+def parse_blog_content(html_content: str) -> str | None:
     """
         Parses the HTML content to extract the main text of the blog post.
 
@@ -33,16 +37,16 @@ def parse_blog_content(html_content:str)->str|None:
     :return: Extracted Plain text or None if parsing fails.
     """
 
-    soup = BeautifulSoup(html_content, 'html.parser')
+    soup = BeautifulSoup(html_content, "html.parser")
 
     selectors = [
-        'article.content',
-        'article.post-content',
-        'div.entry-content',
-        'div.post-content',
-        'div.blog-content',
-        'div.main-content',
-        'main#content',
+        "article.content",
+        "article.post-content",
+        "div.entry-content",
+        "div.post-content",
+        "div.blog-content",
+        "div.main-content",
+        "main#content",
     ]
 
     content_elements = []
@@ -54,15 +58,17 @@ def parse_blog_content(html_content:str)->str|None:
 
     if content_elements:
         for element in content_elements:
-            for s in element(['script', 'style']):
+            for s in element(["script", "style"]):
                 s.extract()
-            text = element.get_text(separator='\n', strip=True)
+            text = element.get_text(separator="\n", strip=True)
             if text not in seen_texts:
                 text_parts.append(text)
                 seen_texts.add(text)
     elif soup.body:
-        logging.warning("No specific content elements found. Extracting text from body.")
-        text_parts.append(soup.body.get_text(separator='\n', strip=True))
+        logging.warning(
+            "No specific content elements found. Extracting text from body."
+        )
+        text_parts.append(soup.body.get_text(separator="\n", strip=True))
     else:
         logging.warning("No <body> tag found. Returning empty string.")
         return ""
@@ -77,11 +83,7 @@ if __name__ == "__main__":
     if html:
         extracted_text = parse_blog_content(html)
         print("--- Extracted Blog Text ---")
-        print(extracted_text[:1000]) # Print first 1000 characters for brevity
+        print(extracted_text[:1000])  # Print first 1000 characters for brevity
         print("...")
     else:
         print("Failed to retrieve blog content.")
-
-
-
-
